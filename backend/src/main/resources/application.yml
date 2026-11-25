@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: scheduler
+
+  # Defaults are for local development only. Docker passes real values as environment variables.
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/scheduler}
+    username: ${DB_USERNAME:scheduler}
+    password: ${DB_PASSWORD:scheduler}
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      # Flyway owns the schema. Hibernate only checks that it matches the entities.
+      ddl-auto: validate
+
+  mvc:
+    problemdetails:
+      enabled: true
+
+  jackson:
+    deserialization:
+      # "every 1.5 minutes" must be an error, not silently rounded to 1.
+      accept-float-as-int: false
+
+  quartz:
+    job-store-type: jdbc
+    jdbc:
+      # "always" would drop the Quartz tables on every start. Flyway creates them instead (V2).
+      initialize-schema: never
+    wait-for-jobs-to-complete-on-shutdown: true
+    properties:
+      org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.PostgreSQLDelegate
+      # Job data is stored as plain strings, never as serialized Java objects.
+      org.quartz.jobStore.useProperties: true
+      # Alarms are saved inside our own database transaction, so Quartz's "new alarm" signal arrives
+      # before the commit. This is how often the scheduler looks again; it is the longest a
+      # just-created, about-to-fire alarm can be late. 5000 is the lowest value Quartz recommends.
+      org.quartz.scheduler.idleWaitTime: ${QUARTZ_IDLE_WAIT_MS:5000}
+      org.quartz.threadPool.threadCount: 5
+
+server:
+  port: ${SERVER_PORT:8080}
