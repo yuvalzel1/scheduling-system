@@ -10,8 +10,11 @@ A small full-stack app for scheduling predefined tasks: pick a task, say when it
 /frontend   React app and its Dockerfile
 /backend    Spring Boot app and its Dockerfile
 /docker     docker-compose.yml for the whole system
+DESIGN.md   how the system is built, with diagrams
 PLAN.md     the plan this was built from
 ```
+
+For the design in pictures (architecture, class and sequence diagrams, the database, and how a new task shows up in the UI by itself), see **[DESIGN.md](DESIGN.md)**.
 
 ## Run it
 
@@ -151,6 +154,8 @@ Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details. V
 Unknown ids give 404; a failure on the server gives 500 without internal details.
 
 ## Design decisions
+
+The diagrams behind these decisions are in [DESIGN.md](DESIGN.md).
 
 **One generic Quartz job; tasks are plain Spring beans.** A task implements a two-method interface: `definition()` (key, name, inputs) and `execute(parameters)`. Quartz only ever sees one job class, `ScheduledTaskJob`, with one job and one trigger per schedule. Adding a task means adding one class; nothing in the scheduling code, the API or the UI changes, because the form is generated from the task's declaration.
 
