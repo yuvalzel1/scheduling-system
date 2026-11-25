@@ -14,8 +14,9 @@ Contents:
 6. [What happens when an alarm rings](#6-what-happens-when-an-alarm-rings)
 7. [How timing becomes a Quartz alarm](#7-how-timing-becomes-a-quartz-alarm)
 8. [Task schemas: how a new task shows up everywhere by itself](#8-task-schemas-how-a-new-task-shows-up-everywhere-by-itself)
-9. [How errors travel](#9-how-errors-travel)
-10. [What is inside the frontend](#10-what-is-inside-the-frontend)
+9. [Run history (added beyond the brief)](#9-run-history-added-beyond-the-brief)
+10. [How errors travel](#10-how-errors-travel)
+11. [What is inside the frontend](#11-what-is-inside-the-frontend)
 
 ---
 
@@ -38,7 +39,7 @@ flowchart LR
     end
 
     subgraph db["postgres container"]
-        ours[("schedules table")]
+        ours[("schedules table<br/>executions table")]
         qrtz[("QRTZ_* tables")]
     end
 
@@ -60,7 +61,10 @@ Two ideas hold the whole thing together:
 
 ## 2. What is inside the backend
 
-Code is grouped by topic. The arrows show who uses whom. Nothing in `task` knows that schedules or Quartz exist.
+Code is grouped by topic. The arrows show who uses whom, and between packages they only ever point one way.
+
+- Nothing in `task` knows that schedules or Quartz exist.
+- Setting and ringing alarms is Quartz's job, and the schedule logic does not see it: it talks to a small interface, `ScheduleAlarms` ("set an alarm, remove an alarm"), and the `schedule.quartz` package plugs in behind it. One place in `schedule` does use the Quartz library directly: `ScheduleValidator` calls Quartz's `CronExpression` to check a cron text, because Quartz is what defines that syntax.
 
 ```mermaid
 flowchart TB
@@ -68,6 +72,7 @@ flowchart TB
         sc["ScheduleController"]
         ss["ScheduleService"]
         sv["ScheduleValidator"]
+        sa["ScheduleAlarms<br/>(interface)"]
         sr["ScheduleRepository"]
         subgraph q["schedule.quartz"]
             reg["QuartzScheduleRegistrar"]
@@ -88,6 +93,11 @@ flowchart TB
         end
     end
 
+    subgraph execution["execution"]
+        xh["ExecutionHistory"]
+        er["ExecutionRepository"]
+    end
+
     subgraph common["common"]
         eh["ApiExceptionHandler"]
         clock["Clock"]
@@ -96,10 +106,13 @@ flowchart TB
     sc --> ss
     ss --> sv
     ss --> sr
-    ss --> reg
+    ss --> xh
+    ss --> sa
+    reg -. implements .-> sa
     reg --> tf
     job --> run
     run --> sr
+    run --> xh
     run --> tr
     sv --> tr
     sv --> tpv
@@ -113,6 +126,7 @@ flowchart TB
 | `task.builtin` | The three tasks themselves |
 | `schedule` | The API, the rules for a valid schedule, and saving it |
 | `schedule.quartz` | Everything that touches Quartz: making alarms, and running the task when one rings |
+| `execution` | The run history: writing down each finished run and reading it back. It knows a schedule only by its id |
 | `common` | Turning errors into API answers, and a single source of "now" |
 
 ---
@@ -231,16 +245,34 @@ classDiagram
     class ScheduleRepository {
         <<interface>>
     }
-    class QuartzScheduleRegistrar {
+    class ScheduleAlarms {
+        <<interface>>
         +register(Schedule)
         +unregister(UUID)
     }
+    class QuartzScheduleRegistrar
     class TriggerFactory {
         +build(key, Timing, ZoneId) Trigger
     }
     class ScheduledTaskJob {
         <<Quartz job>>
         #executeInternal(context)
+    }
+    class ExecutionHistory {
+        +record(scheduleId, taskKey, startedAt, finishedAt, failure)
+        +of(scheduleId) List~ExecutionResponse~
+        +newestOf(scheduleId)
+        +newestOfEachSchedule()
+    }
+    class Execution {
+        <<entity>>
+        UUID id
+        UUID scheduleId
+        String taskKey
+        ExecutionStatus status
+        Instant startedAt
+        Instant finishedAt
+        String errorMessage
     }
     class ScheduledTaskRunner {
         +run(UUID scheduleId)
@@ -249,11 +281,15 @@ classDiagram
     ScheduleController --> ScheduleService
     ScheduleService --> ScheduleValidator
     ScheduleService --> ScheduleRepository
-    ScheduleService --> QuartzScheduleRegistrar
+    ScheduleService --> ScheduleAlarms
+    ScheduleAlarms <|.. QuartzScheduleRegistrar
     QuartzScheduleRegistrar --> TriggerFactory
     QuartzScheduleRegistrar ..> ScheduledTaskJob : schedules
     ScheduledTaskJob --> ScheduledTaskRunner
     ScheduledTaskRunner --> ScheduleRepository
+    ScheduledTaskRunner --> ExecutionHistory : records each run
+    ScheduleService --> ExecutionHistory : reads runs
+    ExecutionHistory --> Execution
     ScheduledTaskRunner --> TaskRegistry
     ScheduleValidator --> TaskRegistry
     ScheduleValidator --> TaskParameterValidator
@@ -294,15 +330,26 @@ erDiagram
         bigint next_fire_time
         smallint misfire_instr "what to do with missed runs"
     }
+    executions {
+        uuid id PK
+        uuid schedule_id FK "deleted together with its schedule"
+        varchar task_key "the task that ran"
+        varchar status "SUCCEEDED or FAILED"
+        timestamptz started_at
+        timestamptz finished_at
+        text error_message "only when FAILED"
+    }
+    schedules ||--o{ executions : "has runs"
     schedules ||--o| qrtz_job_details : "same id, no foreign key"
     qrtz_job_details ||--|| qrtz_triggers : "one alarm per job"
 ```
 
-- Only the timing columns of the current kind are filled; the others are empty.
+- Only the timing columns of the current kind are filled; the others are empty. The database enforces this itself with a `CHECK` rule in the table definition: a one-time row must have `run_at` and nothing else, an interval row must have a number of 1 or more and a unit, and so on. A row that breaks the rule is refused, whoever writes it.
 - Task inputs are stored as JSON because each task has different inputs.
 - The link to Quartz is by name: the Quartz job and trigger are both named after the schedule's id. There is no foreign key, because Quartz owns its tables. Staying in step is guaranteed by the shared transaction instead (next section).
 - A one-time schedule that already ran has **no** Quartz rows any more: Quartz removes a finished alarm by itself. The `schedules` row stays until the user deletes it.
-- Both sets of tables are created by Flyway migrations (`V1` ours, `V2` Quartz's). Quartz has more tables than shown; these are the ones that matter here.
+- `executions` holds one row per finished run. It has a real foreign key to `schedules`, so deleting a schedule removes its runs with it.
+- Both sets of tables are created by Flyway on first start (`V1` ours, `V2` Quartz's). Quartz has more tables than shown; these are the ones that matter here.
 
 ---
 
@@ -351,7 +398,7 @@ If any step inside the box fails, everything in the box is undone. That holds in
 
 **Why "delete old alarm" happens on every save, even on create:** it makes one code path serve create and edit, it guarantees there is never more than one alarm per schedule, and it quietly covers the one-time schedule whose alarm Quartz already removed.
 
-If validation fails (step 6), nothing is written and the API answers 400 with one message per field (see [section 9](#9-how-errors-travel)).
+If validation fails (step 6), nothing is written and the API answers 400 with one message per field (see [section 10](#10-how-errors-travel)).
 
 ---
 
@@ -366,6 +413,7 @@ sequenceDiagram
     participant R as ScheduleRepository
     participant TR as TaskRegistry
     participant T as the Task
+    participant H as ExecutionHistory
 
     Qz->>J: alarm rings (job data: scheduleId)
     J->>Rn: run(scheduleId)
@@ -379,15 +427,17 @@ sequenceDiagram
         Rn->>TR: find(taskKey)
         alt task no longer exists in the code
             TR-->>Rn: nothing
-            Rn->>Rn: log an error and stop
+            Rn->>H: record FAILED ("task does not exist any more")
         else task found
             TR-->>Rn: task
             Rn->>T: execute(inputs)
             alt task throws
                 T-->>Rn: exception
                 Rn->>Rn: log the error
+                Rn->>H: record FAILED (with the error)
             else task succeeds
                 T-->>Rn: done
+                Rn->>H: record SUCCEEDED
             end
         end
     end
@@ -395,10 +445,11 @@ sequenceDiagram
     J-->>Qz: finished
 ```
 
-Three choices are visible here:
+Four choices are visible here:
 
 - **The job is always the same class.** Quartz does not know about tasks. The task is looked up at the moment of running, from our own table. So editing a schedule's inputs never leaves old values stuck inside Quartz.
 - **Nothing escapes the runner.** A failing task is logged and the scheduler carries on. The next run of the same schedule still happens.
+- **Every finished run is written down.** Success or failure, with start time, end time and the error if there was one. Writing it down is itself guarded: if the history cannot be written (for example the schedule was deleted while its task was still running), the run is not affected. See [section 9](#9-run-history-added-beyond-the-brief).
 - **A schedule never overlaps itself.** `ScheduledTaskJob` is marked `@DisallowConcurrentExecution`. If a run is still going when the next one is due, the next one waits. Different schedules still run side by side.
 
 ---
@@ -415,7 +466,7 @@ Three choices are visible here:
 | Cron | cron trigger, the user's text as is | `0 0/5 * * * ?` | skip, wait for the next normal time |
 
 - Four kinds, but only two Quartz trigger types.
-- Weekly and cron alarms carry the schedule's time zone, so 08:30 stays 08:30 local time when the clocks change.
+- Weekly and cron alarms carry the schedule's time zone, so 08:30 stays 08:30 local time when the clocks change. The zone is set when the schedule is created (the browser's zone) and kept when it is edited, even from another zone.
 - Weekly uses day **names** (`MON`), not numbers, because in Quartz the number 1 means Sunday.
 
 ---
@@ -549,7 +600,9 @@ That is the whole change. After a restart, without touching any other file:
 
 What the task can rely on inside `execute`: required inputs are there, and every value has the declared type (`STRING` is a Java `String`, `NUMBER` is a Java `Number`). The validator has already made sure before the schedule was saved.
 
-**How this was checked.** The three existing tasks reach the UI only through this path. A search of the frontend's application code finds zero lines that mention a specific task, and in the backend no class outside `task.builtin` refers to a concrete task class.
+**How this was checked.** An integration test (`GenericTaskIntegrationTests`) does exactly what this section describes, with a task that exists only in the test sources and that no application code mentions. It checks that the API lists the task with its inputs, that a missing required input, a wrong type and an undeclared input are each rejected, and that Quartz runs the task with the saved values.
+
+Beyond that test, the three existing tasks reach the UI only through this path. A search of the frontend's application code finds zero lines that mention a specific task, and in the backend no class outside `task.builtin` refers to a concrete task class.
 
 ### What is *not* automatic
 
@@ -562,7 +615,70 @@ Being honest about the edges:
 
 ---
 
-## 9. How errors travel
+## 9. Run history (added beyond the brief)
+
+**The assignment does not ask for this.** It asks for a table of schedules and a form. But with only that, a user creates a schedule and then sees nothing happen: the only proof that a task ran is a line in the server log. I thought a scheduling tool is not really usable without seeing what ran and whether it worked, so this one feature was added on purpose.
+
+### What the user gets
+
+- A **Last run** column in the table: "Succeeded" or "Failed" with the time, or "Not run yet".
+- A **Run history** button on each row. It opens a list of that schedule's past runs, newest first: when it started, how long it took, which task ran, the result, and the error message if it failed.
+- Both keep themselves up to date. The page asks the server again every 5 seconds, so a run shows up without reloading.
+
+### How it works
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Rn as ScheduledTaskRunner
+    participant H as ExecutionHistory
+    participant DB as executions table
+    participant API as ScheduleController
+    participant UI as React page
+
+    Note over Rn: a task just finished (or failed)
+    Rn->>H: record(scheduleId, taskKey, startedAt, finishedAt, failure)
+    H->>DB: insert one row
+    H->>DB: delete this schedule's rows beyond the newest 100
+
+    loop every 5 seconds
+        UI->>API: GET /api/schedules
+        API->>H: newestOfEachSchedule()
+        H->>DB: one query for all schedules
+        API-->>UI: schedules, each with lastExecution
+    end
+
+    Note over UI: user opens "Run history" on a row
+    UI->>API: GET /api/schedules/{id}/executions
+    API->>H: of(id)
+    H->>DB: this schedule's runs, newest first
+    API-->>UI: list of runs
+```
+
+### The choices, and why
+
+| Choice | Why |
+|---|---|
+| One row per run, written when the run **finishes** | One insert, no "running" state to clean up after a crash. The cost: a run in progress is not visible until it ends. |
+| Only the newest **100** runs per schedule are kept | A schedule that fires every minute would otherwise add 1,440 rows a day forever. |
+| The row stores the **task that ran** | A schedule can later be switched to another task; old runs should still say what really ran. |
+| Deleting a schedule deletes its history (database `ON DELETE CASCADE`) | No orphan rows, and nothing extra to remember in the code. |
+| The database checks the row: a failed run must have a reason, a successful one must not | The same idea as the timing rule in [section 4](#4-the-database): the table cannot hold a contradiction. |
+| Writing history can never break a run | It is wrapped separately. If it fails, a warning is logged and the scheduler carries on. |
+| The `execution` package knows a schedule only by its id | It has no dependency on the schedule code. The schedule code depends on it, not the other way round. |
+| The table gets the newest run of **all** schedules in one query | The list does not get slower with one extra query per row. |
+| The UI polls every 5 seconds | Tasks run on the server on their own, so the page cannot know without asking. Polling is the simplest thing that works; a push channel would be more machinery than this needs. |
+
+### What it does not do
+
+- A run that is still in progress is not shown.
+- If the server is killed while a task is running, that run leaves no history row.
+- There is no filtering, searching or paging: 100 rows per schedule fit in one list.
+- The task's output is not captured, only whether it succeeded and, if not, the error.
+
+---
+
+## 10. How errors travel
 
 Every error leaves the API in the same standard shape (RFC 9457 problem details). Validation errors add a list of `field` + `message`.
 
@@ -590,7 +706,7 @@ Field names the server uses: `taskKey`, `timing`, `timing.runAt`, `timing.every`
 
 ---
 
-## 10. What is inside the frontend
+## 11. What is inside the frontend
 
 ```mermaid
 flowchart TB
@@ -601,6 +717,7 @@ flowchart TB
         tfd["TimingFields<br/>the four timing kinds"]
         tpf["TaskParameterFields<br/>one input per schema entry"]
         dd["DeleteScheduleDialog"]
+        rh["RunHistoryDialog<br/>past runs of one schedule"]
         fm["formModel<br/>form values ↔ API shape"]
         dt["describeTiming<br/>timing in plain words"]
     end
@@ -613,6 +730,7 @@ flowchart TB
     sp --> st
     sp --> sd
     sp --> dd
+    sp --> rh
     sd --> tfd
     sd --> tpf
     sd --> fm
@@ -620,11 +738,12 @@ flowchart TB
     sp --> q
     sd --> q
     dd --> q
+    rh --> q
     q --> cl
     cl -- "/api" --> be(["backend"])
 ```
 
-- **Server data lives in TanStack Query.** The task list is loaded once and kept. After a create, edit or delete, the schedule list is marked stale and reloads, so the table is always what the server has.
+- **Server data lives in TanStack Query.** The task list is loaded once and kept. After a create, edit or delete, the schedule list is marked stale and reloads, so the table is always what the server has. The schedule list and an open run history are also asked for again every 5 seconds, because tasks run on the server without the page knowing.
 - **The form is React Hook Form.** Only the fields of the chosen timing kind and the chosen task exist in the form at any moment, so fields of the other kinds are neither checked nor sent.
 - **`formModel` is the translator.** HTML inputs give text. It turns that into the API shape: local date-time into a UTC moment, number inputs into JSON numbers, empty optional inputs into nothing at all. It also maps a server field name back to the input on screen.
 - **`TaskParameterFields` is where the schema becomes a form** (see [section 8](#8-task-schemas-how-a-new-task-shows-up-everywhere-by-itself)).

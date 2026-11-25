@@ -47,7 +47,7 @@ describe('schedules table', () => {
       within(header)
         .getAllByRole('columnheader')
         .map((cell) => cell.textContent),
-    ).toEqual(['Task', 'When', 'Inputs', 'Actions']);
+    ).toEqual(['Task', 'When', 'Inputs', 'Last run', 'Actions']);
     expect(rows).toHaveLength(4);
 
     // Task names come from the task list, which loads separately.

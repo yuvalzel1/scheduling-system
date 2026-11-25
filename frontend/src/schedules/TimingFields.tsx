@@ -30,9 +30,10 @@ const CRON_HELP =
  * The format help is always shown, except under an error from the backend: that message
  * already explains what is wrong with the expression, so repeating the help would be noise.
  */
-function cronHelperText(error: FieldError | undefined): ReactNode {
+function cronHelperText(error: FieldError | undefined, timeZone: string): ReactNode {
+  const help = `${CRON_HELP} Time zone: ${timeZone}.`;
   if (!error?.message) {
-    return CRON_HELP;
+    return help;
   }
   if (error.type === 'server') {
     return error.message;
@@ -41,7 +42,7 @@ function cronHelperText(error: FieldError | undefined): ReactNode {
     <>
       {error.message}
       <br />
-      {CRON_HELP}
+      {help}
     </>
   );
 }
@@ -65,6 +66,8 @@ function validateFutureDate(value: string): true | string {
 
 interface TimingFieldsProps {
   control: Control<ScheduleFormValues>;
+  /** The zone weekly and cron times are meant in; shown next to those fields. */
+  timeZone: string;
 }
 
 /**
@@ -72,7 +75,7 @@ interface TimingFieldsProps {
  * and a field that leaves the screen also leaves the form (shouldUnregister), so it is neither
  * checked nor sent.
  */
-export function TimingFields({ control }: TimingFieldsProps) {
+export function TimingFields({ control, timeZone }: TimingFieldsProps) {
   const timingType = useWatch({ control, name: 'timingType' });
 
   return (
@@ -231,7 +234,7 @@ export function TimingFields({ control }: TimingFieldsProps) {
                 required
                 fullWidth
                 error={fieldState.invalid}
-                helperText={fieldState.error?.message ?? 'In your local time'}
+                helperText={fieldState.error?.message ?? `Time zone: ${timeZone}`}
                 slotProps={{ inputLabel: { shrink: true } }}
               />
             )}
@@ -253,7 +256,7 @@ export function TimingFields({ control }: TimingFieldsProps) {
               required
               fullWidth
               error={fieldState.invalid}
-              helperText={cronHelperText(fieldState.error)}
+              helperText={cronHelperText(fieldState.error, timeZone)}
               placeholder="0 0/5 * * * ?"
               slotProps={{
                 htmlInput: { spellCheck: false, autoCapitalize: 'off', autoCorrect: 'off' },

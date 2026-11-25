@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.schedulingsystem.scheduler.IntegrationTest;
+import com.schedulingsystem.scheduler.support.RecordingTask;
 
 import org.junit.jupiter.api.Test;
 
@@ -16,9 +17,9 @@ class TaskApiIntegrationTests extends IntegrationTest {
         ApiResponse response = get("/api/tasks");
 
         assertThat(response.status()).isEqualTo(200);
-        assertThat(response.<List<String>>read("$[*].key")).containsExactly("log", "email", "db-query");
+        assertThat(applicationTasks(response.read("$[*].key"))).containsExactly("log", "email", "db-query");
         assertThat(response.<List<String>>read("$[*].name"))
-                .containsExactly("Log Task", "Dummy Email Task", "DB Query Task");
+                .startsWith("Log Task", "Dummy Email Task", "DB Query Task");
         assertThat(response.<List<String>>read("$[*].description")).allSatisfy(text -> assertThat(text).isNotBlank());
     }
 
@@ -38,6 +39,11 @@ class TaskApiIntegrationTests extends IntegrationTest {
         assertThat(response.<List<Map<String, Object>>>read("$[2].parameters")).singleElement().satisfies(limit -> {
             assertThat(limit).containsEntry("name", "limit").containsEntry("type", "NUMBER").containsEntry("required", false);
         });
+    }
+
+    /** The integration-test application carries one extra, test-only task; leave it out. */
+    private static List<String> applicationTasks(List<String> keys) {
+        return keys.stream().filter(key -> !key.equals(RecordingTask.KEY)).toList();
     }
 
     @Test

@@ -9,7 +9,8 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.schedulingsystem.scheduler.common.NotFoundException;
-import com.schedulingsystem.scheduler.schedule.quartz.QuartzScheduleRegistrar;
+import com.schedulingsystem.scheduler.execution.ExecutionHistory;
+import com.schedulingsystem.scheduler.execution.ExecutionResponse;
 import com.schedulingsystem.scheduler.task.TaskParameterValidator;
 
 import org.springframework.stereotype.Service;
@@ -18,33 +19,45 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Creates, changes and removes schedules.
  *
- * <p>Every change touches two things: our {@code schedules} row and the Quartz alarm. Both use the
- * same database connection inside one transaction, so either both happen or neither does.
+ * <p>Every change touches two things: our {@code schedules} row and the schedule's alarm. Both use
+ * the same database connection inside one transaction, so either both happen or neither does.
  */
 @Service
 public class ScheduleService {
 
     private final ScheduleRepository repository;
     private final ScheduleValidator validator;
-    private final QuartzScheduleRegistrar registrar;
+    private final ScheduleAlarms alarms;
+    private final ExecutionHistory executionHistory;
     private final Clock clock;
 
     public ScheduleService(ScheduleRepository repository, ScheduleValidator validator,
-            QuartzScheduleRegistrar registrar, Clock clock) {
+            ScheduleAlarms alarms, ExecutionHistory executionHistory, Clock clock) {
         this.repository = repository;
         this.validator = validator;
-        this.registrar = registrar;
+        this.alarms = alarms;
+        this.executionHistory = executionHistory;
         this.clock = clock;
     }
 
     @Transactional(readOnly = true)
     public List<ScheduleResponse> list() {
-        return repository.findAllByOrderByCreatedAtDesc().stream().map(ScheduleResponse::from).toList();
+        Map<UUID, ExecutionResponse> newestRuns = executionHistory.newestOfEachSchedule();
+        return repository.findAllByOrderByCreatedAtDesc().stream()
+                .map(schedule -> ScheduleResponse.from(schedule, newestRuns.get(schedule.getId())))
+                .toList();
     }
 
     @Transactional(readOnly = true)
     public ScheduleResponse get(UUID id) {
-        return ScheduleResponse.from(find(id));
+        return withNewestRun(find(id));
+    }
+
+    /** The run history of one schedule, newest first. */
+    @Transactional(readOnly = true)
+    public List<ExecutionResponse> executions(UUID id) {
+        find(id);
+        return executionHistory.of(id);
     }
 
     @Transactional
@@ -54,9 +67,9 @@ public class ScheduleService {
         Schedule schedule = new Schedule(now());
         apply(request, schedule);
         repository.save(schedule);
-        registrar.register(schedule);
+        alarms.register(schedule);
 
-        return ScheduleResponse.from(schedule);
+        return ScheduleResponse.from(schedule, null);
     }
 
     @Transactional
@@ -66,21 +79,25 @@ public class ScheduleService {
 
         apply(request, schedule);
         schedule.setUpdatedAt(now());
-        registrar.register(schedule);
+        alarms.register(schedule);
 
-        return ScheduleResponse.from(schedule);
+        return withNewestRun(schedule);
     }
 
     @Transactional
     public void delete(UUID id) {
         Schedule schedule = find(id);
         repository.delete(schedule);
-        registrar.unregister(id);
+        alarms.unregister(id);
     }
 
     /** Cut to what the database column keeps, so a saved schedule reads back exactly as returned. */
     private Instant now() {
         return clock.instant().truncatedTo(ChronoUnit.MICROS);
+    }
+
+    private ScheduleResponse withNewestRun(Schedule schedule) {
+        return ScheduleResponse.from(schedule, executionHistory.newestOf(schedule.getId()).orElse(null));
     }
 
     private Schedule find(UUID id) {

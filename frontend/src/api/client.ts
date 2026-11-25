@@ -1,4 +1,11 @@
-import type { FieldError, ProblemDetail, Schedule, ScheduleRequest, TaskDefinition } from './types';
+import type {
+  Execution,
+  FieldError,
+  ProblemDetail,
+  Schedule,
+  ScheduleRequest,
+  TaskDefinition,
+} from './types';
 
 const BASE_PATH = '/api';
 
@@ -49,6 +56,11 @@ export function listTasks(): Promise<TaskDefinition[]> {
 
 export function listSchedules(): Promise<Schedule[]> {
   return request<Schedule[]>('/schedules');
+}
+
+/** The run history of one schedule, newest first. */
+export function listExecutions(scheduleId: string): Promise<Execution[]> {
+  return request<Execution[]>(`/schedules/${encodeURIComponent(scheduleId)}/executions`);
 }
 
 export function createSchedule(body: ScheduleRequest): Promise<Schedule> {

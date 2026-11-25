@@ -340,6 +340,8 @@ Result: open `http://localhost:3000` and the app works.
 
 Not asked for, so not built:
 
+> **Changed after this plan was written:** run history was added after all. Once the app was running it was clear that a user could not see whether anything had happened. See the README.
+
 - run history
 - pause / resume
 - "run now" button

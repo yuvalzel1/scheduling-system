@@ -16,7 +16,13 @@ import { Controller, useForm, useWatch } from 'react-hook-form';
 import { ApiError } from '../api/client';
 import { tasksQuery, useSaveSchedule } from '../api/queries';
 import type { Schedule } from '../api/types';
-import { toFormField, toFormValues, toRequest, type ScheduleFormValues } from './formModel';
+import {
+  browserTimeZone,
+  type ScheduleFormValues,
+  toFormField,
+  toFormValues,
+  toRequest,
+} from './formModel';
 import { TaskParameterFields } from './TaskParameterFields';
 import { TimingFields } from './TimingFields';
 
@@ -51,6 +57,10 @@ export function ScheduleDialog({ schedule, onClose, onSaved }: ScheduleDialogPro
     defaultValues: toFormValues(schedule),
   });
 
+  // Editing keeps the zone the schedule was created in. Otherwise changing only a message from
+  // another time zone would silently move "08:30" to a different moment.
+  const timeZone = schedule?.timeZone ?? browserTimeZone();
+
   const taskKey = useWatch({ control, name: 'taskKey' });
   const selectedTask = tasks.data?.find((task) => task.key === taskKey);
 
@@ -63,7 +73,7 @@ export function ScheduleDialog({ schedule, onClose, onSaved }: ScheduleDialogPro
     clearErrors('root.server');
 
     try {
-      await saveSchedule.mutateAsync({ id: schedule?.id, body: toRequest(values, task) });
+      await saveSchedule.mutateAsync({ id: schedule?.id, body: toRequest(values, task, timeZone) });
     } catch (error) {
       const unmapped: string[] = [];
       if (error instanceof ApiError && error.status === 400) {
@@ -171,7 +181,7 @@ export function ScheduleDialog({ schedule, onClose, onSaved }: ScheduleDialogPro
                 )}
               />
 
-              <TimingFields control={control} />
+              <TimingFields control={control} timeZone={timeZone} />
 
               {selectedTask && <TaskParameterFields control={control} task={selectedTask} />}
             </Stack>

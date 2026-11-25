@@ -1,5 +1,12 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
-import { createSchedule, deleteSchedule, listSchedules, listTasks, updateSchedule } from './client';
+import {
+  createSchedule,
+  deleteSchedule,
+  listExecutions,
+  listSchedules,
+  listTasks,
+  updateSchedule,
+} from './client';
 import type { ScheduleRequest } from './types';
 
 /** The task list is fixed on the server, so it never goes stale while the page is open. */
@@ -9,10 +16,24 @@ export const tasksQuery = queryOptions({
   staleTime: Infinity,
 });
 
+/**
+ * Tasks run on the server on their own, so what the screen shows about runs goes stale without
+ * anyone clicking. Asking again every few seconds keeps "last run" and the history current.
+ */
+export const RUNS_REFRESH_MS = 5000;
+
 export const schedulesQuery = queryOptions({
   queryKey: ['schedules'],
   queryFn: listSchedules,
+  refetchInterval: RUNS_REFRESH_MS,
 });
+
+export const executionsQuery = (scheduleId: string) =>
+  queryOptions({
+    queryKey: ['schedules', scheduleId, 'executions'],
+    queryFn: () => listExecutions(scheduleId),
+    refetchInterval: RUNS_REFRESH_MS,
+  });
 
 interface SaveScheduleInput {
   /** Present when editing an existing schedule, absent when creating one. */

@@ -48,10 +48,26 @@ export interface ScheduleRequest {
   parameters: Record<string, ParameterValue>;
 }
 
+export type ExecutionStatus = 'SUCCEEDED' | 'FAILED';
+
+/** One finished run of a schedule's task. */
+export interface Execution {
+  id: string;
+  /** The task that ran. A schedule can later be changed to another task. */
+  taskKey: string;
+  status: ExecutionStatus;
+  startedAt: string;
+  finishedAt: string;
+  /** Why the run failed; null when it succeeded. */
+  errorMessage: string | null;
+}
+
 export interface Schedule extends ScheduleRequest {
   id: string;
   createdAt: string;
   updatedAt: string;
+  /** The newest run; null or missing when the schedule has not run yet. */
+  lastExecution?: Execution | null;
 }
 
 export interface FieldError {

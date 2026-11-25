@@ -11,6 +11,7 @@ import java.util.UUID;
 import com.jayway.jsonpath.JsonPath;
 import com.schedulingsystem.scheduler.schedule.ScheduleRepository;
 import com.schedulingsystem.scheduler.schedule.quartz.QuartzScheduleRegistrar;
+import com.schedulingsystem.scheduler.support.RecordingTask;
 import com.schedulingsystem.scheduler.task.builtin.LogTask;
 
 import org.junit.jupiter.api.AfterEach;
@@ -42,7 +43,7 @@ import org.springframework.test.web.servlet.assertj.MockMvcTester;
         "spring.quartz.properties.org.quartz.scheduler.idleWaitTime=1000"
 })
 @AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, TestOnlyTaskConfiguration.class})
 public abstract class IntegrationTest {
 
     protected static final String SCHEDULES = "/api/schedules";
@@ -59,6 +60,10 @@ public abstract class IntegrationTest {
     @Autowired
     protected JdbcClient jdbcClient;
 
+    /** A task defined only in test code; see {@link RecordingTask}. */
+    @Autowired
+    protected RecordingTask recordingTask;
+
     /** Lets tests see when the Log Task really ran, and make it fail on purpose. */
     @MockitoSpyBean
     protected LogTask logTask;
@@ -71,6 +76,7 @@ public abstract class IntegrationTest {
     void removeAllSchedulesAndAlarms() throws SchedulerException {
         scheduler.clear();
         scheduleRepository.deleteAll();
+        recordingTask.forgetRuns();
     }
 
     // ---- requests -------------------------------------------------------------------------

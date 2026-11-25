@@ -4,6 +4,7 @@ import java.time.ZoneId;
 import java.util.UUID;
 
 import com.schedulingsystem.scheduler.schedule.Schedule;
+import com.schedulingsystem.scheduler.schedule.ScheduleAlarms;
 
 import org.quartz.JobBuilder;
 import org.quartz.JobDetail;
@@ -15,11 +16,11 @@ import org.quartz.TriggerKey;
 import org.springframework.stereotype.Component;
 
 /**
- * Keeps Quartz in step with our schedules: one Quartz job with one trigger per schedule,
+ * The Quartz side of {@link ScheduleAlarms}: one Quartz job with one trigger per schedule,
  * both named after the schedule's id.
  */
 @Component
-public class QuartzScheduleRegistrar {
+public class QuartzScheduleRegistrar implements ScheduleAlarms {
 
     public static final String GROUP = "schedules";
 
@@ -45,6 +46,7 @@ public class QuartzScheduleRegistrar {
      * a one-time schedule that already ran: Quartz has dropped its alarm by then, and removing
      * something that is not there is not an error.
      */
+    @Override
     public void register(Schedule schedule) {
         UUID id = schedule.getId();
         Trigger trigger = triggerFactory.build(triggerKey(id), schedule.getTiming(), ZoneId.of(schedule.getTimeZone()));
@@ -56,7 +58,7 @@ public class QuartzScheduleRegistrar {
         }
     }
 
-    /** Removes the alarm. Does nothing when there is none. */
+    @Override
     public void unregister(UUID scheduleId) {
         try {
             scheduler.deleteJob(jobKey(scheduleId));

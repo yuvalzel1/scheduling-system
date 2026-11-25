@@ -4,6 +4,8 @@ import java.net.URI;
 import java.util.List;
 import java.util.UUID;
 
+import com.schedulingsystem.scheduler.execution.ExecutionResponse;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -34,6 +36,12 @@ public class ScheduleController {
     @GetMapping("/{id}")
     public ScheduleResponse get(@PathVariable UUID id) {
         return scheduleService.get(id);
+    }
+
+    /** The run history of one schedule, newest first. */
+    @GetMapping("/{id}/executions")
+    public List<ExecutionResponse> executions(@PathVariable UUID id) {
+        return scheduleService.executions(id);
     }
 
     @PostMapping

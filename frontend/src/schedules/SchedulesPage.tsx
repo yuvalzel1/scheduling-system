@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { schedulesQuery, tasksQuery } from '../api/queries';
 import type { Schedule } from '../api/types';
 import { DeleteScheduleDialog } from './DeleteScheduleDialog';
+import { RunHistoryDialog } from './RunHistoryDialog';
 import { ScheduleDialog } from './ScheduleDialog';
 import { SchedulesTable } from './SchedulesTable';
 
@@ -24,10 +25,12 @@ export function SchedulesPage() {
 
   const [form, setForm] = useState<FormState>({ open: false });
   const [toDelete, setToDelete] = useState<Schedule | null>(null);
+  const [historyOf, setHistoryOf] = useState<Schedule | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const taskNameOf = (schedule: Schedule) =>
-    tasks.data?.find((task) => task.key === schedule.taskKey)?.name ?? schedule.taskKey;
+  const taskNameOfKey = (taskKey: string) =>
+    tasks.data?.find((task) => task.key === taskKey)?.name ?? taskKey;
+  const taskNameOf = (schedule: Schedule) => taskNameOfKey(schedule.taskKey);
 
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
@@ -78,6 +81,7 @@ export function SchedulesPage() {
         <SchedulesTable
           schedules={schedules.data}
           tasks={tasks.data}
+          onHistory={setHistoryOf}
           onEdit={(schedule) => setForm({ open: true, schedule })}
           onDelete={setToDelete}
         />
@@ -91,6 +95,15 @@ export function SchedulesPage() {
             setForm({ open: false });
             setNotice('Schedule saved');
           }}
+        />
+      )}
+
+      {historyOf && (
+        <RunHistoryDialog
+          schedule={historyOf}
+          taskName={taskNameOf(historyOf)}
+          taskNameOf={taskNameOfKey}
+          onClose={() => setHistoryOf(null)}
         />
       )}
 

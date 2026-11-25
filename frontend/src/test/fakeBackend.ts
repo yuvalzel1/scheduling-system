@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
-import type { Schedule, ScheduleRequest } from '../api/types';
+import type { Execution, Schedule, ScheduleRequest } from '../api/types';
 import { TASKS } from './fixtures';
 
 export interface RecordedRequest {
@@ -14,6 +14,8 @@ let nextId = 1;
 /** A tiny in-memory stand-in for the real backend, so the screen refreshes like it would for real. */
 export const backend = {
   schedules: [] as Schedule[],
+  /** Run history by schedule id, newest first. */
+  executions: {} as Record<string, Execution[]>,
   /** Every request the app made, in order. */
   requests: [] as RecordedRequest[],
 
@@ -24,6 +26,7 @@ export const backend = {
 
   reset(): void {
     this.schedules = [];
+    this.executions = {};
     this.requests = [];
     nextId = 1;
   },
@@ -37,6 +40,14 @@ export const server = setupServer(
   http.get('/api/tasks', () => HttpResponse.json(TASKS)),
 
   http.get('/api/schedules', () => HttpResponse.json(backend.schedules)),
+
+  http.get('/api/schedules/:id/executions', ({ params }) => {
+    const id = String(params.id);
+    if (!backend.schedules.some((schedule) => schedule.id === id)) {
+      return HttpResponse.json(NOT_FOUND, { status: 404 });
+    }
+    return HttpResponse.json(backend.executions[id] ?? []);
+  }),
 
   http.post('/api/schedules', async ({ request }) => {
     const body = (await request.json()) as ScheduleRequest;
